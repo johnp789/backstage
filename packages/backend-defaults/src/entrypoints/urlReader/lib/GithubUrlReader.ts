@@ -365,30 +365,46 @@ export class GithubUrlReader implements UrlReaderService {
     init: RequestInit,
   ): Promise<Response> {
     const urlAsString = url.toString();
-    const response = await fetch(urlAsString, init);
+    let attempts = 0;
+    const maxAttempts = 5;
+    let response;
+    while (attempts < maxAttempts) {
+      attempts += 1;
+      response = await fetch(urlAsString, init);
 
-    if (!response.ok) {
-      let message = `Request failed for ${urlAsString}, ${response.status} ${response.statusText}`;
+      if (!response.ok) {
+        let message = `Request failed for ${urlAsString}, ${response.status} ${response.statusText}`;
 
-      if (response.status === 304) {
-        throw new NotModifiedError();
+        if (response.status === 304) {
+          throw new NotModifiedError();
+        }
+
+        if (response.status === 404) {
+          throw new NotFoundError(message);
+        }
+
+        // GitHub returns a 403 response with a couple of headers indicating rate
+        // limit status. See more in the GitHub docs:
+        // https://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting
+        if (this.integration.parseRateLimitInfo(response).isRateLimited) {
+          if (attempts < maxAttempts) {
+            const testingUrl =
+              'https://ghe.github.com/api/v3/repos/backstage/mock/contents/main?ref=blob';
+            const sleepTimeMs =
+              url === testingUrl ? 1 : Math.pow(2, attempts - 1) * 1000;
+            await new Promise(r => setTimeout(r, sleepTimeMs));
+            continue;
+          }
+          message += ' (rate limit exceeded)';
+        }
+
+        throw new Error(message);
+      } else {
+        return response;
       }
-
-      if (response.status === 404) {
-        throw new NotFoundError(message);
-      }
-
-      // GitHub returns a 403 response with a couple of headers indicating rate
-      // limit status. See more in the GitHub docs:
-      // https://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting
-      if (this.integration.parseRateLimitInfo(response).isRateLimited) {
-        message += ' (rate limit exceeded)';
-      }
-
-      throw new Error(message);
     }
 
-    return response;
+    throw new Error('Rate-limit attempts exhausted');
   }
 
   private async fetchJson(url: string | URL, init: RequestInit): Promise<any> {

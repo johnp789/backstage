@@ -511,7 +511,7 @@ export async function getOrganizationRepositories(
     query,
     org,
     r => r?.repositoryOwner?.repositories,
-    async x => x,
+    async x => (x.catalogInfoFile ? x : undefined),
     { org, catalogPathRef },
     logger,
   );
@@ -684,7 +684,10 @@ export async function queryWithPaging<
             )}`,
           );
         }
-        if (error?.status !== 502 || attempts === maxRetries) {
+        if (
+          !(error?.status === 502 || error?.status === 504) ||
+          attempts === maxRetries
+        ) {
           throw error;
         }
         await sleep(Math.pow(2, attempts - 1) * 1000);
